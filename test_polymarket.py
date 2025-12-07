@@ -5,7 +5,7 @@ import time
 import os
 from dotenv import load_dotenv
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs
+from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.constants import POLYGON
 
 load_dotenv()
@@ -164,6 +164,7 @@ def test_place_order_latency():
 
     # Use ClobClient with Private Key
     try:
+        funder = os.getenv("FUNDER")
         print("[INFO] Initializing ClobClient with Private Key...")
         # Initialize client with private key (L2 auth)
         # Note: This might require creating an API key if one doesn't exist, 
@@ -171,8 +172,12 @@ def test_place_order_latency():
         client = ClobClient(
             host=BASE_URL, 
             key=private_key, 
-            chain_id=POLYGON
+            chain_id=POLYGON,
+            signature_type=2,
+            funder=funder
         )
+        api_creds = client.create_or_derive_api_creds()
+        client.set_api_creds(api_creds)
         
         # Create a dummy order args
         # We use a token_id that likely doesn't exist or is invalid to avoid real trade
@@ -182,7 +187,7 @@ def test_place_order_latency():
         
         order_args = OrderArgs(
             price=0.5,
-            size=2,
+            size=10,
             side="BUY",
             token_id="50488227317031565004575684525878022626020008256198844799050708993499540064859" # china taiwan 2027
         )
@@ -191,7 +196,9 @@ def test_place_order_latency():
         start = time.time()
         try:
             # create_order will sign and send
-            resp = client.post_order(order_args)
+            signed_order = client.create_order(order_args)
+            ## GTC(Good-Till-Cancelled) Order
+            resp = client.post_order(signed_order, OrderType.GTC)
             latency = record_latency("Place Order (Signed)", start)
             print(f"[PASS] Signed order sent successfully.")
             print(f"      Response: {resp}")
@@ -219,7 +226,7 @@ def test_place_order_latency():
                 #     print(f"      Failed to create API key: {k_err}")
                 
                 return False
-            elif "Invalid token" in err_str or "not found" in err_str or "Order validation failed" in err_str:
+            elif "Invalid token" in err_str or "not found" in err_str or "Order validation failed" in err_str or "not enough balance" in err_str.lower() or "insufficient balance" in err_str.lower():
                 print(f"[PASS] Auth successful! Server rejected order logic (Expected).")
                 print(f"      Latency: {latency:.2f} ms")
                 return True
