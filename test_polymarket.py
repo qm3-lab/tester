@@ -232,7 +232,7 @@ def test_place_order_latency():
                 return True
             else:
                 print(f"[WARN] Unexpected error: {e}")
-                return True
+                return False
 
     except Exception as e:
         print(f"[FAIL] Error using ClobClient: {e}")
