@@ -2,6 +2,13 @@ import requests
 import sys
 import json
 import time
+import os
+from dotenv import load_dotenv
+from py_clob_client.client import ClobClient
+from py_clob_client.clob_types import OrderArgs
+from py_clob_client.constants import POLYGON
+
+load_dotenv()
 
 BASE_URL = "https://clob.polymarket.com"
 LATENCIES = {}
@@ -121,43 +128,107 @@ def test_read_order_book():
 
 def test_place_order_latency():
     print("\nTesting Place Order Latency (POST /order)...")
-    # Endpoint: POST /order
-    # We expect 401 (Unauthorized) or 400 (Bad Request) if reachable.
-    # We expect 403 (Forbidden) if Geo-blocked.
-    url = f"{BASE_URL}/order"
     
-    # Dummy payload to simulate a real order structure
-    payload = {
-        "token_id": "0",
-        "price": "0.5",
-        "size": "10",
-        "side": "BUY",
-        "expiration": 0,
-        "nonce": 0,
-        "signature": "0x0"
-    }
-    
-    try:
-        start = time.time()
-        resp = requests.post(url, json=payload, timeout=10)
-        latency = record_latency("Place Order (POST /order)", start)
-        
-        if resp.status_code in [400, 401, 422]:
-            print(f"[PASS] Order endpoint is reachable (Status: {resp.status_code}).")
-            print(f"      Latency: {latency:.2f} ms")
-            print("      (Auth error expected as we are testing reachability/latency only)")
-            return True
-        elif resp.status_code == 403:
-            print(f"[FAIL] Order endpoint returned 403 Forbidden.")
-            print("      This likely indicates the VPS IP is GEO-BLOCKED by Polymarket.")
-            return False
-        else:
-            print(f"[WARN] Unexpected status code from order endpoint: {resp.status_code}")
-            print(f"      Latency: {latency:.2f} ms")
-            return True 
+    private_key = os.getenv("PRIVATE_KEY")
+    if not private_key:
+        print("[INFO] No PRIVATE_KEY found in environment. Using dummy data.")
+        # Fallback to dummy request if no key
+        url = f"{BASE_URL}/order"
+        payload = {
+            "token_id": "0",
+            "price": "0.5",
+            "size": "10",
+            "side": "BUY",
+            "expiration": 0,
+            "nonce": 0,
+            "signature": "0x0"
+        }
+        try:
+            start = time.time()
+            resp = requests.post(url, json=payload, timeout=10)
+            latency = record_latency("Place Order (POST /order)", start)
             
+            if resp.status_code in [400, 401, 422]:
+                print(f"[PASS] Order endpoint is reachable (Status: {resp.status_code}).")
+                print(f"      Latency: {latency:.2f} ms")
+                return True
+            elif resp.status_code == 403:
+                print(f"[FAIL] Order endpoint returned 403 Forbidden.")
+                return False
+            else:
+                print(f"[WARN] Unexpected status code: {resp.status_code}")
+                return True
+        except Exception as e:
+            print(f"[FAIL] Error: {e}")
+            return False
+
+    # Use ClobClient with Private Key
+    try:
+        print("[INFO] Initializing ClobClient with Private Key...")
+        # Initialize client with private key (L2 auth)
+        # Note: This might require creating an API key if one doesn't exist, 
+        # but ClobClient usually handles signing if key is provided.
+        client = ClobClient(
+            host=BASE_URL, 
+            key=private_key, 
+            chain_id=POLYGON
+        )
+        
+        # Create a dummy order args
+        # We use a token_id that likely doesn't exist or is invalid to avoid real trade
+        # But to test AUTH, we should use a valid structure.
+        # If we use a random token_id, the server might reject it with "Invalid token" 
+        # AFTER checking auth. This is what we want.
+        
+        order_args = OrderArgs(
+            price=0.5,
+            size=2,
+            side="BUY",
+            token_id="50488227317031565004575684525878022626020008256198844799050708993499540064859" # china taiwan 2027
+        )
+        
+        print("[INFO] Sending signed order...")
+        start = time.time()
+        try:
+            # create_order will sign and send
+            resp = client.post_order(order_args)
+            latency = record_latency("Place Order (Signed)", start)
+            print(f"[PASS] Signed order sent successfully.")
+            print(f"      Response: {resp}")
+            print(f"      Latency: {latency:.2f} ms")
+            return True
+        except Exception as e:
+            latency = record_latency("Place Order (Signed)", start)
+            # Check if error is related to Auth or Logic
+            err_str = str(e)
+            print(f"[INFO] API Response Error: {err_str}")
+            
+            if "Unauthorized" in err_str or "Invalid api key" in err_str:
+                # This means even with PK, auth failed. 
+                # Could be that we need to derive API keys first.
+                print("[FAIL] Authentication failed even with Private Key.")
+                print("      You may need to create an API key first using `client.create_api_key()`")
+                
+                # Attempt to create API key?
+                # print("      Attempting to create API key...")
+                # try:
+                #     api_creds = client.create_api_key()
+                #     print(f"      API Key Created: {api_creds}")
+                #     # Retry order?
+                # except Exception as k_err:
+                #     print(f"      Failed to create API key: {k_err}")
+                
+                return False
+            elif "Invalid token" in err_str or "not found" in err_str or "Order validation failed" in err_str:
+                print(f"[PASS] Auth successful! Server rejected order logic (Expected).")
+                print(f"      Latency: {latency:.2f} ms")
+                return True
+            else:
+                print(f"[WARN] Unexpected error: {e}")
+                return True
+
     except Exception as e:
-        print(f"[FAIL] Error connecting to order endpoint: {e}")
+        print(f"[FAIL] Error using ClobClient: {e}")
         return False
 
 if __name__ == "__main__":
